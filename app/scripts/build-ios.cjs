@@ -1,0 +1,226 @@
+#!/usr/bin/env node
+// iOS build script — produces a signed IPA for TestFlight/App Store Connect.
+//
+//   1. Sync shared/vcard.js into src/lib
+//   2. Bump the build number (persisted in .build-number — App Store Connect
+//      rejects re-uploading the same CFBundleVersion for an existing version)
+//   3. Reinitialise the Tauri iOS project (clean slate — picks up Rust/config changes)
+//   4. Patch the generated project — none of this is picked up by plain
+//      `tauri ios init`/`tauri ios dev`, only by this script:
+//        - ios-native/ (Quick Actions swizzling bridge, also carries
+//          PrivacyInfo.xcprivacy) compiled into the app target and
+//          initialized before ffi::start_app()
+//        - TARGETED_DEVICE_FAMILY restricted to iPhone only
+//        - ITSAppUsesNonExemptEncryption declared (skips the encryption
+//          questionnaire on every App Store Connect upload)
+//   5. tauri ios build --export-method app-store-connect --build-number <n>
+//      (Xcode 26 sometimes rejects the "method" key in exportOptionsPlist with
+//       EXPORT FAILED even though the xcarchive built fine; if that happens,
+//       fall back to a manual xcodebuild -exportArchive call.)
+//   6. Copy the IPA to builds/vX.X.X/
+//
+// Usage:
+//   node scripts/build-ios.cjs
+//   npm run build:ios
+
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const { execSync, spawnSync } = require('child_process');
+
+const ROOT = path.join(__dirname, '..');
+const TEAM_ID = 'RLJ2FY35FD';
+
+// ── 1. Sync shared vCard module ───────────────────────────────────────────────
+execSync('node scripts/sync-shared.cjs', { stdio: 'inherit', cwd: ROOT });
+
+// ── 2. Bump build number ──────────────────────────────────────────────────────
+const buildNumberFile = path.join(ROOT, '.build-number');
+const prevBuildNumber = fs.existsSync(buildNumberFile)
+  ? parseInt(fs.readFileSync(buildNumberFile, 'utf8').trim(), 10) || 0
+  : 0;
+const buildNumber = prevBuildNumber + 1;
+fs.writeFileSync(buildNumberFile, `${buildNumber}\n`);
+console.log(`\n==> Build number: ${buildNumber}`);
+
+// ── 3. Reinitialise Tauri iOS project ─────────────────────────────────────────
+console.log('\n==> Reinitialising Tauri iOS project...');
+const genApple = path.join(ROOT, 'src-tauri', 'gen', 'apple');
+if (fs.existsSync(genApple)) {
+  fs.rmSync(genApple, { recursive: true, force: true });
+}
+execSync('npx tauri ios init', { stdio: 'inherit', cwd: ROOT });
+
+// ── 4. Patch generated iOS project for ios-native/ ────────────────────────────
+console.log('\n==> Patching iOS project...');
+
+// ── 3a. project.yml — add ios-native/ to the app target's sources ────────────
+const projectYmlPath = path.join(genApple, 'project.yml');
+let projectYml = fs.readFileSync(projectYmlPath, 'utf8');
+if (!projectYml.includes('../../ios-native')) {
+  projectYml = projectYml.replace(
+    '      - path: LaunchScreen.storyboard\n',
+    '      - path: LaunchScreen.storyboard\n      - path: ../../ios-native\n'
+  );
+  console.log('    Added ios-native source path (also carries PrivacyInfo.xcprivacy)');
+}
+
+// ── 3a-i. Restrict to iPhone — the app's UI is a fixed phone-sized window
+// (see tauri.conf.json), so building universal (the XcodeGen default) would
+// just stretch that layout across an iPad without ever having been designed
+// for it, and would additionally require iPad screenshots for App Store
+// Connect submission for a form factor the app doesn't actually support.
+if (!projectYml.includes('TARGETED_DEVICE_FAMILY')) {
+  projectYml = projectYml.replace(
+    '      base:\n        ENABLE_BITCODE: false\n',
+    '      base:\n        ENABLE_BITCODE: false\n        TARGETED_DEVICE_FAMILY: "1"\n'
+  );
+  console.log('    Restricted TARGETED_DEVICE_FAMILY to iPhone only');
+}
+if (projectYml.includes('UISupportedInterfaceOrientations~ipad')) {
+  projectYml = projectYml.replace(
+    /\n {8}UISupportedInterfaceOrientations~ipad:\n(?: {10}- UIInterfaceOrientation\w+\n)+/,
+    '\n'
+  );
+  console.log('    Removed iPad-only orientation keys (iPhone-only target)');
+}
+
+// ── 3a-ii. Declare exempt encryption — the app only ever speaks HTTPS, which
+// is exempt from export compliance, but without this key App Store Connect
+// re-asks the encryption questionnaire on every single upload.
+if (!projectYml.includes('ITSAppUsesNonExemptEncryption')) {
+  projectYml = projectYml.replace(
+    '        UILaunchStoryboardName: LaunchScreen\n',
+    '        UILaunchStoryboardName: LaunchScreen\n        ITSAppUsesNonExemptEncryption: false\n'
+  );
+  console.log('    Declared exempt encryption (HTTPS only, no export compliance prompt)');
+}
+
+fs.writeFileSync(projectYmlPath, projectYml);
+
+console.log('    Regenerating .xcodeproj from patched project.yml...');
+execSync('xcodegen generate --spec project.yml', { stdio: 'inherit', cwd: genApple });
+
+// ── 3b. main.mm — call the bridge init before ffi::start_app() ───────────────
+const mainMmPath = path.join(genApple, 'Sources', 'bizbuz', 'main.mm');
+let mainMm = fs.readFileSync(mainMmPath, 'utf8');
+if (!mainMm.includes('BizbuzQuickActionsBridgeInit')) {
+  mainMm = mainMm.replace(
+    '#include "bindings/bindings.h"',
+    '#include "bindings/bindings.h"\n\nextern "C" void BizbuzQuickActionsBridgeInit(void);'
+  );
+  mainMm = mainMm.replace(
+    '\tffi::start_app();',
+    '\tBizbuzQuickActionsBridgeInit();\n\tffi::start_app();'
+  );
+  fs.writeFileSync(mainMmPath, mainMm);
+  console.log('    Patched main.mm for BizbuzQuickActionsBridgeInit');
+}
+
+// ── 5. Build IPA ───────────────────────────────────────────────────────────────
+console.log('\n==> Building BizBuz IPA...');
+const conf = JSON.parse(fs.readFileSync(path.join(ROOT, 'src-tauri', 'tauri.conf.json'), 'utf8'));
+const ipaName = `${conf.productName}.ipa`;
+const buildArm64 = path.join(genApple, 'build', 'arm64');
+const ipaSrc = path.join(buildArm64, ipaName);
+
+// Remove stale IPA so we can reliably detect a new successful build.
+if (fs.existsSync(ipaSrc)) fs.rmSync(ipaSrc);
+
+spawnSync(
+  'npx', ['tauri', 'ios', 'build', '--export-method', 'app-store-connect', '--build-number', String(buildNumber)],
+  { stdio: 'inherit', cwd: ROOT, shell: true }
+);
+
+// ── 5a. Xcode 26 fallback: manual xcodebuild export ──────────────────────────
+if (!fs.existsSync(ipaSrc)) {
+  console.log('\n==> Tauri export failed — checking why before attempting a manual export...');
+
+  // The manual export below uses signingStyle: automatic with no explicit
+  // export method, which silently re-signs with WHATEVER identity is in the
+  // keychain rather than failing if that identity is the wrong type. If
+  // there's no Apple Distribution identity at all, that produces an IPA that
+  // "succeeds" locally but is actually signed for Development - Apple's
+  // server-side validation then rejects it on upload with a confusing
+  // "Invalid Provisioning Profile / Missing code-signing certificate" error
+  // instead of failing here where the real cause is obvious. Bail out loudly
+  // instead of taking that path (this is exactly what happened building 5-7:
+  // every one of them "succeeded" this way and was never actually a valid
+  // App Store artifact).
+  const identities = spawnSync('security', ['find-identity', '-v', '-p', 'codesigning'], {
+    encoding: 'utf8',
+  }).stdout || '';
+  if (!/Apple Distribution|iOS Distribution/.test(identities)) {
+    console.error('\n❌ No "Apple Distribution" (or legacy "iOS Distribution") signing certificate found in the keychain.');
+    console.error('   Only a Development identity is available, which cannot produce a valid App Store build:');
+    console.error(identities.split('\n').filter((l) => l.trim()).map((l) => `     ${l}`).join('\n'));
+    console.error('\n   Fix: Xcode -> Settings -> Accounts -> select the team -> Manage Certificates -> "+" -> Apple Distribution.');
+    console.error(`   (Team ${TEAM_ID} - must be an account with Admin/App Manager access to that team.)`);
+    process.exit(1);
+  }
+
+  console.log('    Distribution identity present - export failure is likely the known Xcode 26 quirk, retrying manually...');
+
+  const buildDir2 = path.join(genApple, 'build');
+  if (!fs.existsSync(buildDir2)) {
+    console.error('❌ Build directory not found — the compilation itself failed.');
+    process.exit(1);
+  }
+  const archives = fs.readdirSync(buildDir2).filter((f) => f.endsWith('.xcarchive'));
+  if (archives.length === 0) {
+    console.error('❌ No xcarchive found — the build itself failed.');
+    process.exit(1);
+  }
+  const archiveName = archives
+    .map((f) => ({ f, mtime: fs.statSync(path.join(buildDir2, f)).mtime }))
+    .sort((a, b) => b.mtime - a.mtime)[0].f;
+  const xcarchive = path.join(buildDir2, archiveName);
+  console.log(`    Archive: ${archiveName}`);
+
+  const exportPlist = path.join(require('os').tmpdir(), 'bizbuz-export-options.plist');
+  fs.writeFileSync(exportPlist, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>destination</key>
+    <string>export</string>
+    <key>signingStyle</key>
+    <string>automatic</string>
+    <key>teamID</key>
+    <string>${TEAM_ID}</string>
+</dict>
+</plist>
+`);
+
+  fs.mkdirSync(buildArm64, { recursive: true });
+
+  const exportResult = spawnSync(
+    'xcodebuild', [
+      '-exportArchive',
+      '-archivePath', xcarchive,
+      '-exportOptionsPlist', exportPlist,
+      '-exportPath', buildArm64,
+      '-allowProvisioningUpdates',
+    ],
+    { stdio: 'inherit', cwd: ROOT }
+  );
+
+  if (exportResult.status !== 0 || !fs.existsSync(ipaSrc)) {
+    console.error(`\n❌ Manual export also failed. IPA not found at ${ipaSrc}`);
+    process.exit(1);
+  }
+  console.log('    Manual export succeeded.');
+}
+
+// ── 6. Copy IPA to builds/vX.X.X/ ────────────────────────────────────────────
+const version = conf.version;
+const buildDir = path.join(ROOT, 'builds', `v${version}`);
+const versionedIpaName = `${conf.productName}-${buildNumber}.ipa`;
+
+fs.mkdirSync(buildDir, { recursive: true });
+fs.copyFileSync(ipaSrc, path.join(buildDir, versionedIpaName));
+
+console.log(`\n✅ Build complete: builds/v${version}/${versionedIpaName} (build ${buildNumber})`);
+console.log('   Upload via Transporter.app, or:');
+console.log(`   xcrun altool --upload-app -f builds/v${version}/${versionedIpaName} -t ios --apiKey <KEY_ID> --apiIssuer <ISSUER_ID>\n`);

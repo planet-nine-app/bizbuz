@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/mobile-schema.json",
+  "identifier": "default",
+  "description": "Default capabilities for BizBuz",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "share-sheet:default",
+    "dialog:allow-open",
+    "fs:allow-read-file"
+  ]
+}

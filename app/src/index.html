@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover">
+    <title>BizBuz</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main id="app">
+        <!-- My Cards view -->
+        <section id="cards-view" class="view" hidden>
+            <header class="view-header">
+                <h1>My Cards</h1>
+                <p class="subtitle">Keep up to 4 — work, personal, whatever you need.</p>
+            </header>
+
+            <div class="cards-grid" id="cards-grid"></div>
+
+            <section class="referral-section">
+                <p class="referral-label">Invite friends to BizBuz</p>
+                <button type="button" class="btn btn-secondary" id="referral-share-btn">Share BizBuz</button>
+            </section>
+        </section>
+
+        <!-- Edit Profile view -->
+        <section id="edit-view" class="view" hidden>
+            <header class="view-header">
+                <h1>Your BizBuz Profile</h1>
+                <p class="subtitle">This stays on your device — nothing is uploaded.</p>
+            </header>
+
+            <form id="profile-form">
+                <div class="avatar avatar-editable" id="photo-preview"></div>
+                <button type="button" class="btn btn-secondary" id="choose-photo-btn">Choose Photo</button>
+
+                <label>Name
+                    <input type="text" id="field-name" placeholder="Ada Lovelace" required>
+                </label>
+                <label>Title
+                    <input type="text" id="field-title" placeholder="Software Enchantress">
+                </label>
+                <label>Company
+                    <input type="text" id="field-company" placeholder="Planet Nine">
+                </label>
+                <label>Email
+                    <input type="email" id="field-email" placeholder="ada@planetnine.app">
+                </label>
+                <label>Phone
+                    <input type="tel" id="field-phone" placeholder="+1 (555) 123-4567">
+                </label>
+                <label>Website
+                    <input type="text" id="field-website" placeholder="planetnine.app">
+                </label>
+                <label>Location
+                    <input type="text" id="field-location" placeholder="The Cosmos">
+                </label>
+                <label>Bio
+                    <textarea id="field-bio" rows="3" placeholder="A short bio"></textarea>
+                </label>
+
+                <p class="section-label">Social</p>
+                <label>GitHub
+                    <input type="text" id="field-github" placeholder="username">
+                </label>
+                <label>Codeberg
+                    <input type="text" id="field-codeberg" placeholder="username">
+                </label>
+                <label>LinkedIn
+                    <input type="text" id="field-linkedin" placeholder="username">
+                </label>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-secondary" id="cancel-edit-btn" hidden>Cancel</button>
+                </div>
+                <button type="button" class="btn btn-danger" id="delete-card-btn" hidden>Delete Card</button>
+            </form>
+        </section>
+
+        <!-- Card view -->
+        <section id="card-view" class="view" hidden>
+            <div class="card">
+                <div class="avatar" id="card-avatar"></div>
+                <h1 class="card-name" id="card-name"></h1>
+                <p class="card-title" id="card-title"></p>
+                <p class="card-company" id="card-company"></p>
+                <p class="card-bio" id="card-bio"></p>
+
+                <div class="contact-info" id="card-contact"></div>
+
+                <div class="form-actions">
+                    <button type="button" class="btn btn-primary" id="share-btn">Share</button>
+                    <button type="button" class="btn btn-secondary" id="edit-btn">Edit</button>
+                </div>
+
+                <button type="button" class="btn btn-secondary" id="publish-btn">Get Shareable Link</button>
+                <div class="link-row" id="link-row" hidden>
+                    <span class="link-text" id="link-text"></span>
+                    <button type="button" class="btn btn-secondary btn-copy" id="copy-link-btn">Copy</button>
+                </div>
+            </div>
+
+            <button type="button" class="btn btn-link" id="back-to-cards-btn">◀ My Cards</button>
+        </section>
+
+        <p class="status-msg" id="status-msg"></p>
+    </main>
+    <script type="module" src="main.js"></script>
+</body>
+</html>

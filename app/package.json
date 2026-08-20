@@ -1,0 +1,19 @@
+{
+  "name": "bizbuz-app",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "tauri": "tauri",
+    "predev": "node scripts/sync-shared.cjs",
+    "dev": "npm run predev && tauri dev",
+    "build": "npm run predev && tauri build",
+    "ios:dev": "npm run predev && tauri ios dev",
+    "build:ios": "node scripts/build-ios.cjs",
+    "android:dev": "npm run predev && tauri android dev",
+    "android:build": "npm run predev && tauri android build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

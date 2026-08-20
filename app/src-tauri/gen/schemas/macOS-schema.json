@@ -5835,36 +5835,6 @@
           "markdownDescription": "This enables all file write related commands without any pre-configured accessible paths."
         },
         {
-          "description": "Default permissions for the quick-actions plugin.\n#### This default permission set includes:\n\n- `allow-set-quick-actions`\n- `allow-get-pending-quick-action`",
-          "type": "string",
-          "const": "quick-actions:default",
-          "markdownDescription": "Default permissions for the quick-actions plugin.\n#### This default permission set includes:\n\n- `allow-set-quick-actions`\n- `allow-get-pending-quick-action`"
-        },
-        {
-          "description": "Enables the get_pending_quick_action command without any pre-configured scope.",
-          "type": "string",
-          "const": "quick-actions:allow-get-pending-quick-action",
-          "markdownDescription": "Enables the get_pending_quick_action command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the set_quick_actions command without any pre-configured scope.",
-          "type": "string",
-          "const": "quick-actions:allow-set-quick-actions",
-          "markdownDescription": "Enables the set_quick_actions command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the get_pending_quick_action command without any pre-configured scope.",
-          "type": "string",
-          "const": "quick-actions:deny-get-pending-quick-action",
-          "markdownDescription": "Denies the get_pending_quick_action command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the set_quick_actions command without any pre-configured scope.",
-          "type": "string",
-          "const": "quick-actions:deny-set-quick-actions",
-          "markdownDescription": "Denies the set_quick_actions command without any pre-configured scope."
-        },
-        {
           "description": "Default permissions for the share-sheet plugin. Allows presenting the native share sheet with a generated file or a plain text/URL.\n#### This default permission set includes:\n\n- `allow-share-file`\n- `allow-share-text`",
           "type": "string",
           "const": "share-sheet:default",

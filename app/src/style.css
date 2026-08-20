@@ -1,0 +1,337 @@
+:root {
+    --green: #10b981;
+    --green-dark: #059669;
+    --purple: #a78bfa;
+    --bg: #0a001a;
+    --white-70: rgba(255, 255, 255, 0.7);
+    --white-10: rgba(255, 255, 255, 0.1);
+    --white-05: rgba(255, 255, 255, 0.05);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: white;
+    min-height: 100vh;
+}
+
+#app {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 24px 20px 40px;
+}
+
+.view-header {
+    margin-bottom: 24px;
+}
+
+h1 {
+    font-size: 26px;
+    font-weight: 700;
+    background: linear-gradient(135deg, var(--green) 0%, var(--purple) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.subtitle {
+    font-size: 13px;
+    color: var(--white-70);
+    margin-top: 6px;
+}
+
+form {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+label {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--white-70);
+}
+
+input, textarea {
+    background: var(--white-05);
+    border: 1px solid var(--white-10);
+    border-radius: 10px;
+    padding: 12px 14px;
+    color: white;
+    font-size: 15px;
+    font-family: inherit;
+}
+
+input:focus, textarea:focus {
+    outline: none;
+    border-color: var(--green);
+}
+
+textarea {
+    resize: vertical;
+}
+
+.section-label {
+    font-size: 14px;
+    color: var(--purple);
+    margin-top: 8px;
+}
+
+.btn {
+    padding: 14px 20px;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+
+.btn-primary {
+    background: linear-gradient(135deg, var(--green) 0%, var(--green-dark) 100%);
+    color: white;
+    box-shadow: 0 4px 20px rgba(16, 185, 129, 0.3);
+}
+
+.btn-primary:active {
+    transform: translateY(1px);
+}
+
+.btn-secondary {
+    background: var(--white-10);
+    color: white;
+    border: 1px solid var(--white-10);
+}
+
+.btn-danger {
+    background: transparent;
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+    margin-top: 14px;
+    width: 100%;
+}
+
+.btn-link {
+    background: transparent;
+    color: var(--white-70);
+    padding: 10px;
+    margin-top: 8px;
+    width: 100%;
+    text-decoration: none;
+}
+
+.form-actions {
+    display: flex;
+    gap: 12px;
+}
+
+.form-actions .btn {
+    flex: 1;
+}
+
+#publish-btn {
+    width: 100%;
+    margin-top: 12px;
+}
+
+.link-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: var(--white-05);
+    border: 1px solid var(--white-10);
+    border-radius: 10px;
+}
+
+.link-text {
+    flex: 1;
+    font-size: 12px;
+    color: var(--white-70);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.btn-copy {
+    padding: 8px 14px;
+    font-size: 13px;
+}
+
+.cards-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+}
+
+.referral-section {
+    margin-top: 28px;
+    padding-top: 20px;
+    border-top: 1px solid var(--white-10);
+}
+
+.referral-label {
+    font-size: 13px;
+    color: var(--white-70);
+    margin-bottom: 10px;
+}
+
+.referral-section .btn {
+    width: 100%;
+}
+
+.card-tile {
+    aspect-ratio: 1;
+    border-radius: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    cursor: pointer;
+    border: none;
+    font-family: inherit;
+    padding: 16px;
+}
+
+.card-tile.filled {
+    background: var(--white-05);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.card-tile.filled .avatar {
+    width: 56px;
+    height: 56px;
+    font-size: 20px;
+    margin: 0;
+    box-shadow: none;
+}
+
+.card-tile.filled .card-tile-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: white;
+    text-align: center;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.card-tile.empty {
+    background: transparent;
+    border: 1px dashed var(--white-10);
+    color: var(--white-70);
+    font-size: 32px;
+    font-weight: 300;
+}
+
+.card {
+    background: var(--white-05);
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    border-radius: 24px;
+    padding: 36px 28px;
+    text-align: center;
+    box-shadow: 0 0 40px rgba(16, 185, 129, 0.1);
+}
+
+.avatar {
+    width: 100px;
+    height: 100px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--green) 0%, var(--green-dark) 100%);
+    margin: 0 auto 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 36px;
+    font-weight: bold;
+    color: white;
+    box-shadow: 0 0 30px rgba(16, 185, 129, 0.3);
+    background-size: cover;
+    background-position: center;
+}
+
+.avatar-editable {
+    cursor: pointer;
+}
+
+.card-name {
+    font-size: 22px;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.card-title {
+    font-size: 14px;
+    color: var(--purple);
+    margin-bottom: 2px;
+}
+
+.card-company {
+    font-size: 13px;
+    color: var(--white-70);
+    margin-bottom: 12px;
+}
+
+.card-bio {
+    font-size: 13px;
+    color: var(--white-70);
+    font-style: italic;
+    margin-bottom: 20px;
+    line-height: 1.5;
+}
+
+.contact-info {
+    text-align: left;
+    margin-bottom: 20px;
+}
+
+.contact-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--white-10);
+    color: var(--white-70);
+    text-decoration: none;
+    font-size: 14px;
+}
+
+.contact-item:last-child {
+    border-bottom: none;
+}
+
+.contact-icon {
+    width: 20px;
+    text-align: center;
+    color: var(--green);
+}
+
+.status-msg {
+    position: fixed;
+    left: 50%;
+    bottom: 24px;
+    transform: translateX(-50%);
+    font-size: 13px;
+    color: var(--white-70);
+    background: var(--white-10);
+    padding: 8px 16px;
+    border-radius: 10px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.status-msg.visible {
+    opacity: 1;
+}
