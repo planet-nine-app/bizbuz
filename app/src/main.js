@@ -3,6 +3,9 @@ import { generateVCard, vcardFilename } from './lib/vcard.js';
 const { core, dialog, fs } = window.__TAURI__;
 
 const MAX_CARDS = 4;
+// Cap on the canonical profile's field list — keep in sync with
+// MAX_PROFILE_FIELDS in src-tauri/src/lib.rs.
+const MAX_PROFILE_FIELDS = 20;
 
 const cardsView = document.getElementById('cards-view');
 const editView = document.getElementById('edit-view');
@@ -19,6 +22,20 @@ const linkRow = document.getElementById('link-row');
 const linkText = document.getElementById('link-text');
 const copyLinkBtn = document.getElementById('copy-link-btn');
 const referralShareBtn = document.getElementById('referral-share-btn');
+const importLinkitylinkBtn = document.getElementById('import-linkitylink-btn');
+const shareAppGroupBtn = document.getElementById('share-app-group-btn');
+const profileNavBtn = document.getElementById('profile-nav-btn');
+const profileView = document.getElementById('profile-view');
+const profileForm = document.getElementById('canonical-profile-form');
+const profilePhotoPreview = document.getElementById('profile-photo-preview');
+const profileChoosePhotoBtn = document.getElementById('profile-choose-photo-btn');
+const profilePullBtn = document.getElementById('profile-pull-btn');
+const profileFieldsEl = document.getElementById('profile-fields');
+const profileNewFieldName = document.getElementById('profile-new-field-name');
+const profileNewFieldValue = document.getElementById('profile-new-field-value');
+const profileAddFieldBtn = document.getElementById('profile-add-field-btn');
+const profileFieldLimitHint = document.getElementById('profile-field-limit-hint');
+const profileCloseBtn = document.getElementById('profile-close-btn');
 
 const PHOTO_SIZE = 480;
 const PHOTO_QUALITY = 0.85;
@@ -35,6 +52,8 @@ function showView(name) {
     cardsView.hidden = name !== 'cards';
     editView.hidden = name !== 'edit';
     cardView.hidden = name !== 'card';
+    profileView.hidden = name !== 'profile';
+    profileNavBtn.hidden = name === 'profile';
 }
 
 let statusTimeout = null;
@@ -99,6 +118,55 @@ chooseePhotoBtn.addEventListener('click', async () => {
         setAvatarContent(photoPreview, pendingPhoto, '');
     } catch (err) {
         setStatus(`Couldn't set photo: ${err}`);
+    }
+});
+
+// ── App Group sharing ────────────────────────────────────────────────────────
+//
+// Import fills only currently-empty fields — additive, not destructive,
+// consistent with an in-progress edit taking priority over an import.
+
+importLinkitylinkBtn.addEventListener('click', async () => {
+    importLinkitylinkBtn.disabled = true;
+    setStatus('Checking for a shared Linkitylink card…');
+    try {
+        const r = await core.invoke('import_from_linkitylink');
+        const nameEl = document.getElementById('field-name');
+        const bioEl = document.getElementById('field-bio');
+        const websiteEl = document.getElementById('field-website');
+        const githubEl = document.getElementById('field-github');
+        const codebergEl = document.getElementById('field-codeberg');
+        const linkedinEl = document.getElementById('field-linkedin');
+        if (r.name && !nameEl.value.trim()) nameEl.value = r.name;
+        if (r.bio && !bioEl.value.trim()) bioEl.value = r.bio;
+        if (r.photo && !pendingPhoto) {
+            pendingPhoto = r.photo;
+            setAvatarContent(photoPreview, pendingPhoto, nameEl.value || '');
+        }
+        if (r.website && !websiteEl.value.trim()) websiteEl.value = r.website;
+        if (r.github && !githubEl.value.trim()) githubEl.value = r.github;
+        if (r.codeberg && !codebergEl.value.trim()) codebergEl.value = r.codeberg;
+        if (r.linkedin && !linkedinEl.value.trim()) linkedinEl.value = r.linkedin;
+        setStatus(r.skippedCount > 0
+            ? `Imported from Linkitylink — ${r.skippedCount} link${r.skippedCount === 1 ? '' : 's'} couldn't be imported (BizBuz only supports GitHub, Codeberg, LinkedIn, and one website link).`
+            : 'Imported from Linkitylink!');
+    } catch (err) {
+        setStatus(`${err}`); // Rust already returns a complete, user-facing sentence
+    } finally {
+        importLinkitylinkBtn.disabled = false;
+    }
+});
+
+shareAppGroupBtn.addEventListener('click', async () => {
+    if (!activeCard) return;
+    shareAppGroupBtn.disabled = true;
+    try {
+        await core.invoke('share_card_to_app_group', { cardId: activeCard.id });
+        setStatus('Shared — Linkitylink can now import this profile.');
+    } catch (err) {
+        setStatus(`Couldn't share: ${err}`);
+    } finally {
+        shareAppGroupBtn.disabled = false;
     }
 });
 
@@ -413,6 +481,238 @@ referralShareBtn.addEventListener('click', async () => {
         referralShareBtn.disabled = false;
     }
 });
+
+// ── Canonical profile ────────────────────────────────────────────────────────
+//
+// A separate, App-Group-shared record — independent of `cards`/`activeCard`
+// above. Its own photo/field-list state is kept apart from the card editor's
+// (pendingPhoto/etc. would be the wrong variables here) so editing this
+// screen can never bleed into whichever card is currently being edited.
+// Every field (built-in or pulled-in) is a {slug, name, value} tuple — the
+// slug is the stable machine identity used for dedup, `name` is a human
+// label, `value` is the content. Mirrors slugify() in src-tauri/src/lib.rs.
+
+let preProfileView = 'cards'; // the view to return to on Close/Save
+let pendingProfilePhoto = null;
+let pendingProfileFields = [];
+let editingProfileFieldIndex = null;
+
+function slugify(s) {
+    return s
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+}
+
+function renderProfileFields() {
+    profileFieldsEl.innerHTML = '';
+
+    pendingProfileFields.forEach((entry, index) => {
+        const li = document.createElement('li');
+        li.className = 'link-entry';
+
+        if (index === editingProfileFieldIndex) {
+            const fields = document.createElement('div');
+            fields.className = 'link-entry-edit-fields';
+
+            const nameInput = document.createElement('input');
+            nameInput.type = 'text';
+            nameInput.placeholder = 'Field';
+            nameInput.maxLength = 40;
+            nameInput.value = entry.name;
+
+            const valueInput = document.createElement('input');
+            valueInput.type = 'text';
+            valueInput.placeholder = 'Value';
+            valueInput.value = entry.value;
+
+            const commit = () => {
+                entry.name = nameInput.value.trim();
+                entry.value = valueInput.value.trim();
+                entry.slug = slugify(entry.name);
+                editingProfileFieldIndex = null;
+                renderProfileFields();
+            };
+            const onEnter = (e) => { if (e.key === 'Enter') commit(); };
+            nameInput.addEventListener('keydown', onEnter);
+            valueInput.addEventListener('keydown', onEnter);
+
+            fields.append(nameInput, valueInput);
+            li.appendChild(fields);
+
+            const doneBtn = document.createElement('button');
+            doneBtn.type = 'button';
+            doneBtn.textContent = '✓';
+            doneBtn.addEventListener('click', commit);
+
+            const actions = document.createElement('div');
+            actions.className = 'link-entry-actions';
+            actions.appendChild(doneBtn);
+            li.appendChild(actions);
+
+            profileFieldsEl.appendChild(li);
+            nameInput.focus();
+            return;
+        }
+
+        const text = document.createElement('div');
+        text.className = 'link-entry-text';
+        text.innerHTML = '<div class="link-entry-label"></div><div class="link-entry-url"></div>';
+        text.querySelector('.link-entry-label').textContent = entry.name || entry.slug;
+        text.querySelector('.link-entry-url').textContent = entry.value;
+        text.addEventListener('click', () => {
+            editingProfileFieldIndex = index;
+            renderProfileFields();
+        });
+        li.appendChild(text);
+
+        const actions = document.createElement('div');
+        actions.className = 'link-entry-actions';
+
+        const upBtn = document.createElement('button');
+        upBtn.type = 'button';
+        upBtn.textContent = '↑';
+        upBtn.disabled = index === 0;
+        upBtn.addEventListener('click', () => {
+            [pendingProfileFields[index - 1], pendingProfileFields[index]] = [pendingProfileFields[index], pendingProfileFields[index - 1]];
+            renderProfileFields();
+        });
+
+        const downBtn = document.createElement('button');
+        downBtn.type = 'button';
+        downBtn.textContent = '↓';
+        downBtn.disabled = index === pendingProfileFields.length - 1;
+        downBtn.addEventListener('click', () => {
+            [pendingProfileFields[index], pendingProfileFields[index + 1]] = [pendingProfileFields[index + 1], pendingProfileFields[index]];
+            renderProfileFields();
+        });
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', () => {
+            pendingProfileFields.splice(index, 1);
+            if (editingProfileFieldIndex === index) editingProfileFieldIndex = null;
+            renderProfileFields();
+        });
+
+        actions.append(upBtn, downBtn, removeBtn);
+        li.appendChild(actions);
+        profileFieldsEl.appendChild(li);
+    });
+
+    const atLimit = pendingProfileFields.length >= MAX_PROFILE_FIELDS;
+    profileAddFieldBtn.disabled = atLimit;
+    profileFieldLimitHint.hidden = !atLimit;
+}
+
+profileAddFieldBtn.addEventListener('click', () => {
+    const name = profileNewFieldName.value.trim();
+    const value = profileNewFieldValue.value.trim();
+    if (!name || !value || pendingProfileFields.length >= MAX_PROFILE_FIELDS) return;
+
+    pendingProfileFields.push({ slug: slugify(name), name, value });
+    profileNewFieldName.value = '';
+    profileNewFieldValue.value = '';
+    renderProfileFields();
+});
+
+profileChoosePhotoBtn.addEventListener('click', async () => {
+    try {
+        const path = await dialog.open({
+            multiple: false,
+            filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'heic'] }],
+        });
+        if (!path) return;
+
+        const bytes = await fs.readFile(path);
+        pendingProfilePhoto = await resizeImageToJpegBase64(bytes);
+        setAvatarContent(profilePhotoPreview, pendingProfilePhoto, '');
+    } catch (err) {
+        setStatus(`Couldn't set photo: ${err}`);
+    }
+});
+
+const BIZBUZ_FIELD_DEFS = [
+    ['name', 'Name'], ['title', 'Title'], ['company', 'Company'], ['email', 'Email'],
+    ['phone', 'Phone'], ['website', 'Website'], ['location', 'Location'], ['bio', 'Bio'],
+];
+const BIZBUZ_SOCIAL_DEFS = [['github', 'GitHub'], ['codeberg', 'Codeberg'], ['linkedin', 'LinkedIn']];
+
+// Local-only: reads the `cards` array already loaded in memory (all of
+// BizBuz's own saved cards, not just the active one). First-non-empty-per-
+// slug wins; never overwrites a field already present in the profile.
+profilePullBtn.addEventListener('click', () => {
+    const existingSlugs = new Set(pendingProfileFields.map((f) => f.slug));
+    for (const c of cards) {
+        for (const [key, label] of BIZBUZ_FIELD_DEFS) {
+            if (c[key] && !existingSlugs.has(key)) {
+                pendingProfileFields.push({ slug: key, name: label, value: c[key] });
+                existingSlugs.add(key);
+            }
+        }
+        for (const [key, label] of BIZBUZ_SOCIAL_DEFS) {
+            const value = c.social?.[key];
+            if (value && !existingSlugs.has(key)) {
+                pendingProfileFields.push({ slug: key, name: label, value });
+                existingSlugs.add(key);
+            }
+        }
+        if (c.photo && !pendingProfilePhoto) {
+            pendingProfilePhoto = c.photo;
+            setAvatarContent(profilePhotoPreview, pendingProfilePhoto, '');
+        }
+    }
+    renderProfileFields();
+    setStatus('Pulled in fields from your cards.');
+});
+
+function fillProfileForm(profile) {
+    pendingProfilePhoto = profile?.photo || null;
+    pendingProfileFields = (profile?.fields || []).map((f) => ({ ...f }));
+    editingProfileFieldIndex = null;
+    setAvatarContent(profilePhotoPreview, profile?.photo, '');
+    renderProfileFields();
+}
+
+function canonicalProfileFromForm() {
+    return {
+        photo: pendingProfilePhoto || undefined,
+        fields: pendingProfileFields,
+    };
+}
+
+function currentViewName() {
+    if (!cardsView.hidden) return 'cards';
+    if (!editView.hidden) return 'edit';
+    if (!cardView.hidden) return 'card';
+    return 'cards';
+}
+
+profileNavBtn.addEventListener('click', async () => {
+    preProfileView = currentViewName();
+    try {
+        const profile = await core.invoke('load_canonical_profile');
+        fillProfileForm(profile);
+        showView('profile');
+    } catch (err) {
+        setStatus(`Couldn't load profile: ${err}`);
+    }
+});
+
+profileForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+        await core.invoke('save_canonical_profile', { profile: canonicalProfileFromForm() });
+        setStatus('Profile saved — shared across your apps.');
+        showView(preProfileView);
+    } catch (err) {
+        setStatus(`Couldn't save: ${err}`);
+    }
+});
+
+profileCloseBtn.addEventListener('click', () => showView(preProfileView));
 
 loadCards().then(() => {
     backgroundPublishAllCards();

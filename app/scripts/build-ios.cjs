@@ -13,6 +13,8 @@
 //        - TARGETED_DEVICE_FAMILY restricted to iPhone only
 //        - ITSAppUsesNonExemptEncryption declared (skips the encryption
 //          questionnaire on every App Store Connect upload)
+//        - real app icon (icons/ios/*.png) re-copied over the default one
+//          `tauri ios init` regenerates every time
 //   5. tauri ios build --export-method app-store-connect --build-number <n>
 //      (Xcode 26 sometimes rejects the "method" key in exportOptionsPlist with
 //       EXPORT FAILED even though the xcarchive built fine; if that happens,
@@ -117,6 +119,52 @@ if (!mainMm.includes('BizbuzQuickActionsBridgeInit')) {
   fs.writeFileSync(mainMmPath, mainMm);
   console.log('    Patched main.mm for BizbuzQuickActionsBridgeInit');
 }
+
+// ── 4c. Re-copy the real app icon over `tauri ios init`'s default one ────────
+// `tauri ios init` (step 3, above) wipes gen/apple/ and regenerates
+// Assets.xcassets/AppIcon.appiconset/ from scratch every build - and what it
+// puts there is NOT our actual icon (`tauri icon` only writes into an
+// existing gen/apple/ as a side-effect convenience; it doesn't survive a
+// fresh init). Without this step every real build silently reverts to
+// Tauri's stock icon, which is why past builds looked fine locally but
+// showed a generic icon in TestFlight. Mirrors the same fix already used in
+// the homeventory repo's build-ios.cjs.
+const iconSrc = path.join(ROOT, 'src-tauri', 'icons', 'ios');
+const iconDest = path.join(genApple, 'Assets.xcassets', 'AppIcon.appiconset');
+const iconFiles = fs.readdirSync(iconSrc).filter((f) => f.endsWith('.png'));
+iconFiles.forEach((f) => fs.copyFileSync(path.join(iconSrc, f), path.join(iconDest, f)));
+console.log(`    Restored ${iconFiles.length} real app icons -> gen/apple/Assets.xcassets/AppIcon.appiconset/`);
+
+// `tauri icon` always writes every size as RGBA, even from a fully opaque
+// source — App Store Connect rejects an alpha channel on the 1024x1024
+// marketing icon ("Invalid large app icon... can't be transparent or
+// contain an alpha channel"). Flattening every copied icon here (not just
+// the 1024 one) keeps the whole set consistent and survives a future
+// `tauri icon` regeneration, since this runs on every build, not just once.
+iconFiles.forEach((f) => {
+  const p = path.join(iconDest, f);
+  spawnSync('magick', [p, '-background', '#0a001a', '-alpha', 'remove', '-alpha', 'off', p]);
+});
+console.log('    Flattened alpha channel out of all app icons (App Store rejects it on the 1024x1024 marketing icon)');
+
+// ── 4d. Patch App Group entitlements — `tauri ios init` (step 3) regenerates
+// this as an empty <dict/> every build, same problem as the app icon above.
+// project.yml already points CODE_SIGN_ENTITLEMENTS at this file
+// automatically (XcodeGen's `entitlements.path` key), so only the file
+// content itself needs patching, not project.yml.
+const entitlementsPath = path.join(genApple, 'bizbuz_iOS', 'bizbuz_iOS.entitlements');
+fs.writeFileSync(entitlementsPath, `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>group.freyja.idothis</string>
+    </array>
+</dict>
+</plist>
+`);
+console.log('    Patched App Group entitlements (group.freyja.idothis)');
 
 // ── 5. Build IPA ───────────────────────────────────────────────────────────────
 console.log('\n==> Building BizBuz IPA...');

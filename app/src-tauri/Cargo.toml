@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-share-sheet = { path = "tauri-plugin-share-sheet" }
+tauri-plugin-app-group = { path = "tauri-plugin-app-group" }
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }

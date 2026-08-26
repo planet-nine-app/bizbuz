@@ -692,6 +692,215 @@ async fn get_or_create_referral_link(app: tauri::AppHandle) -> Result<String, St
     Ok(share_url)
 }
 
+// ── App Group sharing ───────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn share_card_to_app_group(app: tauri::AppHandle, card_id: String) -> Result<(), String> {
+    let store = read_cards(&app)?;
+    let card = store
+        .cards
+        .iter()
+        .find(|c| c.id == card_id)
+        .ok_or_else(|| "Card not found".to_string())?;
+    let json = serde_json::to_string(card).map_err(|e| e.to_string())?;
+    tauri_plugin_app_group::write_value_sync(&app, "bizbuz.profile", &json)
+}
+
+/// Permissive mirror of Linkitylink's `LinkCard`/`LinkEntry` — every field
+/// optional/defaulted so a version skew between the two apps (one ahead of
+/// the other on a given phone) never breaks deserialization here.
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct LinkitylinkEntryMirror {
+    label: String,
+    url: String,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct LinkitylinkCardMirror {
+    name: Option<String>,
+    bio: Option<String>,
+    photo: Option<String>,
+    links: Vec<LinkitylinkEntryMirror>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFromLinkitylinkResult {
+    pub name: Option<String>,
+    pub bio: Option<String>,
+    pub photo: Option<String>,
+    pub github: Option<String>,
+    pub codeberg: Option<String>,
+    pub linkedin: Option<String>,
+    pub website: Option<String>,
+    pub skipped_count: usize,
+}
+
+fn host_and_path(url: &str) -> (String, String) {
+    let trimmed = url.trim();
+    let lower = trimmed.to_lowercase();
+    let after_scheme = if lower.starts_with("https://") {
+        &trimmed[8..]
+    } else if lower.starts_with("http://") {
+        &trimmed[7..]
+    } else {
+        trimmed
+    };
+    let mut parts = after_scheme.splitn(2, '/');
+    let host = parts
+        .next()
+        .unwrap_or("")
+        .trim_start_matches("www.")
+        .to_lowercase();
+    let path = parts.next().unwrap_or("").trim_end_matches('/').to_string();
+    (host, path)
+}
+
+/// Scoped-down equivalent of Linkitylink's `detect_platform`, limited to the
+/// three hosts BizBuz actually has fields for. Returns (field name, handle).
+fn social_field_for_url(url: &str) -> Option<(&'static str, String)> {
+    let (host, path) = host_and_path(url);
+    match host.as_str() {
+        "github.com" | "codeberg.org" => {
+            let handle = path.split('/').next().unwrap_or("").to_string();
+            if handle.is_empty() {
+                None
+            } else {
+                Some((if host == "github.com" { "github" } else { "codeberg" }, handle))
+            }
+        }
+        "linkedin.com" => {
+            let rest = path.strip_prefix("in/").unwrap_or(&path);
+            let handle = rest.split('/').next().unwrap_or("").to_string();
+            if handle.is_empty() {
+                None
+            } else {
+                Some(("linkedin", handle))
+            }
+        }
+        _ => None,
+    }
+}
+
+#[tauri::command]
+async fn import_from_linkitylink(app: tauri::AppHandle) -> Result<ImportFromLinkitylinkResult, String> {
+    let raw = tauri_plugin_app_group::read_value_sync(&app, "linkitylink.card")?.ok_or_else(|| {
+        "Linkitylink hasn't shared anything yet — open Linkitylink and tap \u{201c}Share to App Group\u{201d} first.".to_string()
+    })?;
+    let card: LinkitylinkCardMirror =
+        serde_json::from_str(&raw).map_err(|e| format!("Couldn't read Linkitylink's shared card: {e}"))?;
+
+    let (mut github, mut codeberg, mut linkedin, mut website) = (None, None, None, None);
+    let mut skipped = 0usize;
+
+    for link in &card.links {
+        if let Some((field, handle)) = social_field_for_url(&link.url) {
+            match field {
+                "github" if github.is_none() => github = Some(handle),
+                "codeberg" if codeberg.is_none() => codeberg = Some(handle),
+                "linkedin" if linkedin.is_none() => linkedin = Some(handle),
+                _ => skipped += 1,
+            }
+        } else if website.is_none() {
+            website = Some(link.url.clone());
+        } else {
+            skipped += 1;
+        }
+    }
+
+    Ok(ImportFromLinkitylinkResult {
+        name: card.name,
+        bio: card.bio,
+        photo: card.photo,
+        github,
+        codeberg,
+        linkedin,
+        website,
+        skipped_count: skipped,
+    })
+}
+
+// ── Canonical profile ───────────────────────────────────────────────────────
+//
+// A third, independent record — separate from this app's own CardsStore —
+// holding "all of the user's information" in one place, shared verbatim
+// across every app in group.freyja.idothis via the App Group plugin. Not
+// wired into save_card/publish_card in any way; editing it never touches
+// cards.json.
+
+// Higher than MAX_LINKS(10) since this now covers every profile field, not
+// just links.
+const MAX_PROFILE_FIELDS: usize = 20;
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalField {
+    pub slug: String,
+    pub name: String,
+    pub value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalProfile {
+    pub photo: Option<String>,
+    #[serde(default)]
+    pub fields: Vec<CanonicalField>,
+    pub updated_at: Option<String>,
+}
+
+fn slugify(s: &str) -> String {
+    let mut slug = String::new();
+    let mut last_was_sep = true; // drop leading separators
+    for ch in s.trim().chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+            last_was_sep = false;
+        } else if !last_was_sep {
+            slug.push('_');
+            last_was_sep = true;
+        }
+    }
+    while slug.ends_with('_') {
+        slug.pop();
+    }
+    slug
+}
+
+#[tauri::command]
+async fn load_canonical_profile(app: tauri::AppHandle) -> Result<Option<CanonicalProfile>, String> {
+    let raw = tauri_plugin_app_group::read_value_sync(&app, "canonical.profile")?;
+    match raw {
+        // A decode failure (e.g. leftover data from an earlier schema) is
+        // treated as "nothing saved yet" rather than a hard error.
+        Some(json) => Ok(serde_json::from_str(&json).ok()),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+async fn save_canonical_profile(app: tauri::AppHandle, mut profile: CanonicalProfile) -> Result<CanonicalProfile, String> {
+    let mut deduped: Vec<CanonicalField> = Vec::new();
+    for mut field in profile.fields.into_iter() {
+        if field.slug.trim().is_empty() {
+            field.slug = slugify(&field.name);
+        }
+        if field.slug.is_empty() {
+            continue;
+        }
+        deduped.retain(|f| f.slug != field.slug);
+        deduped.push(field);
+    }
+    deduped.truncate(MAX_PROFILE_FIELDS);
+    profile.fields = deduped;
+    profile.updated_at = Some(unix_now_ms_string());
+    let json = serde_json::to_string(&profile).map_err(|e| e.to_string())?;
+    tauri_plugin_app_group::write_value_sync(&app, "canonical.profile", &json)?;
+    Ok(profile)
+}
+
 // ── App entry ────────────────────────────────────────────────────────────────
 //
 // NOTE: tauri-plugin-quick-actions is temporarily NOT registered — its
@@ -706,6 +915,7 @@ async fn get_or_create_referral_link(app: tauri::AppHandle) -> Result<String, St
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_share_sheet::init())
+        .plugin(tauri_plugin_app_group::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
@@ -713,7 +923,11 @@ pub fn run() {
             save_card,
             delete_card,
             publish_card,
-            get_or_create_referral_link
+            get_or_create_referral_link,
+            share_card_to_app_group,
+            import_from_linkitylink,
+            load_canonical_profile,
+            save_canonical_profile
         ])
         .run(tauri::generate_context!())
         .expect("error while running bizbuz");

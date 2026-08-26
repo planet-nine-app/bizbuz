@@ -8,6 +8,8 @@
 </head>
 <body>
     <main id="app">
+        <button type="button" class="profile-nav-btn" id="profile-nav-btn">Profile</button>
+
         <!-- My Cards view -->
         <section id="cards-view" class="view" hidden>
             <header class="view-header">
@@ -33,6 +35,7 @@
             <form id="profile-form">
                 <div class="avatar avatar-editable" id="photo-preview"></div>
                 <button type="button" class="btn btn-secondary" id="choose-photo-btn">Choose Photo</button>
+                <button type="button" class="btn btn-secondary" id="import-linkitylink-btn">Import from Linkitylink</button>
 
                 <label>Name
                     <input type="text" id="field-name" placeholder="Ada Lovelace" required>
@@ -95,6 +98,7 @@
                 </div>
 
                 <button type="button" class="btn btn-secondary" id="publish-btn">Get Shareable Link</button>
+                <button type="button" class="btn btn-secondary" id="share-app-group-btn">Share to App Group</button>
                 <div class="link-row" id="link-row" hidden>
                     <span class="link-text" id="link-text"></span>
                     <button type="button" class="btn btn-secondary btn-copy" id="copy-link-btn">Copy</button>
@@ -102,6 +106,35 @@
             </div>
 
             <button type="button" class="btn btn-link" id="back-to-cards-btn">◀ My Cards</button>
+        </section>
+
+        <!-- Canonical profile view — a separate, App-Group-shared record; not
+             connected to My Cards / cards.json in any way. -->
+        <section id="profile-view" class="view" hidden>
+            <header class="view-header">
+                <h1>Shared Profile</h1>
+                <p class="subtitle">Synced across BizBuz, Linkitylink, and other apps in this group.</p>
+            </header>
+
+            <form id="canonical-profile-form">
+                <div class="avatar avatar-editable" id="profile-photo-preview"></div>
+                <button type="button" class="btn btn-secondary" id="profile-choose-photo-btn">Choose Photo</button>
+                <button type="button" class="btn btn-secondary" id="profile-pull-btn">Fill from My Cards</button>
+
+                <p class="section-label">Fields</p>
+                <ul class="link-entries" id="profile-fields"></ul>
+                <div class="link-entry-form">
+                    <input type="text" id="profile-new-field-name" placeholder="Field (e.g. GitHub)" maxlength="40">
+                    <input type="text" id="profile-new-field-value" placeholder="Value">
+                    <button type="button" class="btn btn-secondary" id="profile-add-field-btn">Add Field</button>
+                </div>
+                <p class="hint" id="profile-field-limit-hint" hidden>Up to 20 fields — remove one to add another.</p>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-secondary" id="profile-close-btn">Close</button>
+                </div>
+            </form>
         </section>
 
         <p class="status-msg" id="status-msg"></p>

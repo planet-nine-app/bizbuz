@@ -21,6 +21,16 @@
 				     Screen Quick Action between cold launch and the webview coming
 				     up - no App Group, nothing shared with other apps. -->
 				<string>CA92.1</string>
+				<!-- TODO before first TestFlight upload with App Group sharing:
+				     tauri-plugin-app-group/ios/Sources/AppGroupPlugin.swift now
+				     also reads/writes UserDefaults(suiteName: "group.freyja.idothis"),
+				     shared with Linkitylink - a DIFFERENT reason code than CA92.1
+				     applies to App-Group-scoped access. Look up the current correct
+				     code on Apple's published Required Reason API list (Privacy
+				     Manifest Files docs) rather than guessing here, then add it as
+				     a second <string> entry in this array. This only affects the
+				     App Store Connect privacy report at upload time, not the build
+				     itself, so it's safe to leave open until then. -->
 			</array>
 		</dict>
 	</array>

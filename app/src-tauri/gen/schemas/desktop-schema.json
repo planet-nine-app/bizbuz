@@ -2001,6 +2001,36 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Default permissions for the app-group plugin. Allows reading/writing a single JSON string shared between BizBuz and Linkitylink via the group.freyja.idothis App Group.\n#### This default permission set includes:\n\n- `allow-write-value`\n- `allow-read-value`",
+          "type": "string",
+          "const": "app-group:default",
+          "markdownDescription": "Default permissions for the app-group plugin. Allows reading/writing a single JSON string shared between BizBuz and Linkitylink via the group.freyja.idothis App Group.\n#### This default permission set includes:\n\n- `allow-write-value`\n- `allow-read-value`"
+        },
+        {
+          "description": "Enables the read_value command without any pre-configured scope.",
+          "type": "string",
+          "const": "app-group:allow-read-value",
+          "markdownDescription": "Enables the read_value command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the write_value command without any pre-configured scope.",
+          "type": "string",
+          "const": "app-group:allow-write-value",
+          "markdownDescription": "Enables the write_value command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the read_value command without any pre-configured scope.",
+          "type": "string",
+          "const": "app-group:deny-read-value",
+          "markdownDescription": "Denies the read_value command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the write_value command without any pre-configured scope.",
+          "type": "string",
+          "const": "app-group:deny-write-value",
+          "markdownDescription": "Denies the write_value command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

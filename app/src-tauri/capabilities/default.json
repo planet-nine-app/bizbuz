@@ -6,6 +6,7 @@
   "permissions": [
     "core:default",
     "share-sheet:default",
+    "app-group:default",
     "dialog:allow-open",
     "fs:allow-read-file"
   ]
