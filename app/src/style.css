@@ -66,7 +66,7 @@ label {
     color: var(--white-70);
 }
 
-input, textarea {
+input, textarea, select {
     background: var(--white-05);
     border: 1px solid var(--white-10);
     border-radius: 10px;
@@ -76,9 +76,13 @@ input, textarea {
     font-family: inherit;
 }
 
-input:focus, textarea:focus {
+input:focus, textarea:focus, select:focus {
     outline: none;
     border-color: var(--green);
+}
+
+select option {
+    color: black;
 }
 
 textarea {
@@ -143,7 +147,7 @@ textarea {
     flex: 1;
 }
 
-#publish-btn {
+#share-app-group-btn {
     width: 100%;
     margin-top: 12px;
 }
@@ -248,6 +252,10 @@ textarea {
     padding: 36px 28px;
     text-align: center;
     box-shadow: 0 0 40px rgba(16, 185, 129, 0.1);
+    /* Generous clearance so the card's own bottom buttons (Share to App
+       Group, the pay-link row) never sit behind the fixed My Cards/Profile
+       button row below. */
+    margin-bottom: 100px;
 }
 
 .avatar {
@@ -411,12 +419,12 @@ textarea {
     color: var(--white-70);
 }
 
-/* ── Canonical profile nav button ────────────────────────────────────────── */
+/* ── Canonical profile / back nav buttons ────────────────────────────────── */
 
-.profile-nav-btn {
+.profile-nav-btn,
+.back-nav-btn {
     position: fixed;
     bottom: calc(20px + env(safe-area-inset-bottom));
-    right: calc(20px + env(safe-area-inset-right));
     background: var(--white-10);
     border: 1px solid var(--white-10);
     color: white;
@@ -427,6 +435,71 @@ textarea {
     cursor: pointer;
     z-index: 100;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+
+.profile-nav-btn {
+    right: calc(20px + env(safe-area-inset-right));
+}
+
+.back-nav-btn {
+    left: calc(20px + env(safe-area-inset-left));
+}
+
+/* ── Profile view: sticky footer ──────────────────────────────────────────
+   The canonical profile's field list can grow long (up to 20 fields), so
+   Save/Close need to stay reachable without scrolling the whole page down
+   to find them. #profile-view breaks out of #app's normal document flow
+   into its own full-height flex column (scrollable content + pinned
+   footer) only while active — the `:not([hidden])` guard is required since
+   an #id selector otherwise outranks the browser's own `[hidden]{display:
+   none}` rule and would stay visible even when hidden is set. */
+
+#profile-view:not([hidden]) {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    padding: 0;
+    z-index: 50;
+    overflow: hidden;
+}
+
+#profile-view .view-scroll {
+    flex: 1;
+    /* Without this, a flex item defaults to min-height:auto, so it grows
+       to fit ALL its content instead of shrinking to the space actually
+       left in the column — the scroll area then overflows past the fixed
+       viewport instead of scrolling within it, and .view-footer's buttons
+       end up pushed out of reach below the fold. */
+    min-height: 0;
+    overflow-y: auto;
+    max-width: 480px;
+    width: 100%;
+    margin: 0 auto;
+    padding: calc(24px + env(safe-area-inset-top))
+             calc(20px + env(safe-area-inset-right))
+             20px
+             calc(20px + env(safe-area-inset-left));
+}
+
+#profile-view .view-footer {
+    flex-shrink: 0;
+    display: flex;
+    gap: 12px;
+    max-width: 480px;
+    width: 100%;
+    margin: 0 auto;
+    padding: 16px calc(20px + env(safe-area-inset-right))
+             calc(20px + env(safe-area-inset-bottom))
+             calc(20px + env(safe-area-inset-left));
+    border-top: 1px solid var(--white-10);
+    background: var(--bg);
+}
+
+#profile-view .view-footer .btn {
+    flex: 1;
+    margin-top: 0;
 }
 
 .status-msg {

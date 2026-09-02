@@ -2,295 +2,89 @@
 
 ## Overview
 
-BizBuz is Planet Nine's digital business card service that creates beautiful, shareable business cards from Prof profiles. Users can share via QR codes and let contacts save their info with one tap.
+BizBuz is a Planet Nine native digital-business-card app: a user builds up to 4 cards (work, personal, side hustle, etc.), each rendered as a shareable SVG card and published to BDO so it has a permanent public link (served live by savage). Cards can also be exported as a standard vCard via the OS share sheet. Separately, BizBuz hosts one screen of the cross-app **Canonical Profile** — a single shared identity record synced to sibling apps via an iOS App Group — but that record is independent of the cards themselves; the two never touch.
 
-**Location**: `/planet-nine/bizbuz/`
-**Port**: 3011 (default)
-**Status**: Initial Implementation (November 2025)
+**Location**: `/bizbuz/app/`
+**Identifier**: `com.freyja.bizbuz`
+**Stack**: Tauri 2 (Rust core in `src-tauri/`, vanilla JS/HTML/CSS frontend in `src/`, no framework/bundler), targeting iOS.
+**Status**: Actively developed / TestFlight builds (build 21 as of this writing).
 
 ## Architecture
 
-### Core Components
+### Frontend (`app/src/`)
 
-1. **Express Server** (`server.js`) - Main application server
-2. **Prof Integration** - Fetches user profiles from Prof service
-3. **Card Renderer** - Generates HTML business card pages
-4. **vCard Generator** - Creates downloadable contact files
-5. **QR Code Generator** - Creates scannable QR code images
+Three files plus one synced module:
+- `index.html` — four views as sibling `<section>`s toggled via a `hidden` attribute: `cards-view` (grid of up to 4 cards), `edit-view` (the card form), `card-view` (a single card's read view + share actions), `profile-view` (the separate Canonical Profile editor).
+- `main.js` — all view logic (794 lines), calling into the Rust backend via `core.invoke(...)`.
+- `style.css` — dark/green/purple visual language shared across the Planet Nine app family.
+- `src/lib/vcard.js` — **not authored here**. `scripts/sync-shared.cjs` copies it in from `/bizbuz/shared/vcard.js` on every `predev`/`build` so the frontend can `import` it as a local module without a bundler resolving paths outside `src/`. It's a pure vCard 3.0 formatter shared with the legacy `server.js` (see Known Limitations).
 
-### Data Flow
+### Backend (`app/src-tauri/src/lib.rs`)
 
-```
-User Request → BizBuz → Prof Service → Profile Data → HTML Card
-                                                   ↓
-                                             vCard Download
-                                                   ↓
-                                              QR Code Image
-```
+Tauri commands, invoked from `main.js`:
 
-## Implementation Status
+| Command | Purpose |
+|---|---|
+| `get_categories` | Returns the static business-category taxonomy (slug/label pairs shared with idothis) |
+| `load_cards` / `save_card` / `delete_card` | Local multi-card store (`cards.json`), capped at `MAX_CARDS = 4` |
+| `publish_card` | Renders the card as SVG + vCard, publishes/republishes it to BDO, computes the permanent savage share link |
+| `get_or_create_referral_link` | Publishes (once per install) a static "invite a friend" SVG card to its own BDO identity, for sharing the app itself |
+| `share_card_to_app_group` | Writes the active card's JSON into the App Group under key `bizbuz.profile`, for Linkitylink to import |
+| `import_from_linkitylink` | Reads `linkitylink.card` from the App Group and maps its links into BizBuz's name/bio/photo/website/social fields |
+| `load_canonical_profile` / `save_canonical_profile` | The shared cross-app Canonical Profile (see below) |
 
-### Completed (November 2025)
+No server of its own for the live app — BizBuz is a thin client over two allyabase services, both currently pointed at `https://allyabase-gateway-12345.netlify.app/`:
 
-- Express server with static file serving
-- Prof integration with fallback demo profile
-- Business card HTML generation with Planet Nine theme
-- vCard 3.0 download endpoint
-- QR code generation endpoint
-- Landing page (`public/index.html`)
-- Documentation (README.md, CLAUDE.md)
+| Service | Const | Role |
+|---|---|---|
+| **BDO** | `GATEWAY_BDO_URL` | Public storage for each published card and the referral card — one sessionless keypair per card (BDO's public slot is keyed by pubKey, so one shared identity would let every card overwrite the others; verified against allyabase's `db.js`) |
+| **savage** | `SAVAGE_URL` | Renders whatever `svg` field is present on a published BDO record as a live webpage, at a locally pre-signed, non-expiring URL — no round trip needed to get a shareable link |
 
-### TODO
+`GATEWAY_ENV = "test-12345"` namespaces each card's `bdoUuidByEnv` and the referral link, so pointing the app at a different gateway deployment later won't collide with what's already published under this one.
 
-- Real Prof service testing
-- Sessionless authentication for private profiles
-- Custom card themes
-- Card analytics (privacy-preserving)
-- Profile image support
-- Social share previews (Open Graph)
+### Card lifecycle
 
-## API Endpoints
+1. **Create/Edit** (`save_card`): upserts a card into `cards.json` by id, assigning a fresh id for new cards. Rejects a new card once 4 already exist.
+2. **Publish** (`publish_card`): generates/reuses a per-card BDO keypair (`bdo_keys.json`), renders the card as both an SVG (`render_card_svg`, avatar/name/title/company/bio/contact rows in the app's dark/green/purple palette) and a vCard (`render_vcard`), and either creates or updates the BDO record. Every save triggers a background republish automatically (`backgroundPublishCard`) — there's no explicit "republish" button, saving again is the retry on failure.
+3. **Share**: the "Share" button hands a generated vCard (via `src/lib/vcard.js`) to the OS share sheet; the card view also shows the permanent savage `shareUrl` with a Copy button once published.
+4. **Cross-app exchange**: "Import from Linkitylink" pulls `linkitylink.card` from the App Group into the currently-open form (only filling fields still empty); "Share to App Group" pushes the active card out for Linkitylink to pick up. Saving a card whose category is food-related (caterer, restauranteur, chef, food cart, baker) offers a one-time prompt to also list it on letemcook via a `letemcook://add-location` deep link.
+5. **Referral**: a separate "Share BizBuz" button on the cards list publishes (once per install, then reuses) a static invite-card SVG to its own BDO identity and hands the resulting savage URL to the share sheet — used to invite others to the app itself, not tied to any specific business card.
 
-### GET /
+### Canonical Profile (shared across apps)
 
-Landing page with feature overview and demo link.
+A third, independent record — separate from `cards.json` entirely — synced via the **`group.freyja.idothis`** iOS App Group, the same group Linkitylink, Gettit, and Letemcook read/write. Read/written through `tauri-plugin-app-group`'s `read_value_sync`/`write_value_sync` under the key `canonical.profile`. Its shape is a photo plus an ordered, user-editable list of `{slug, name, value}` fields (capped at `MAX_PROFILE_FIELDS = 20`), not the fixed schema cards use. "Fill from My Cards" pulls first-non-empty values out of the locally-loaded `cards` array without a round trip. The Rust struct also carries an `address` field BizBuz has no UI for (Gettit does) — `save_canonical_profile` always carries forward whatever address is already stored rather than clobbering it with `None`, since every app that touches this record overwrites the whole thing on save. This logic is intentionally copy-pasted byte-for-byte across the sibling apps rather than shared as a library.
 
-### GET /card/:identifier
+## Build & Deploy
 
-Renders HTML business card page.
+`app/package.json` scripts (each `dev`/`build` runs `predev`/`sync-shared.cjs` first to refresh `src/lib/vcard.js`):
+- `npm run dev` — `tauri dev`
+- `npm run build` — desktop `tauri build`
+- `npm run build:ios` — `scripts/build-ios.cjs`, the real distribution path (produces a signed IPA)
+- `npm run ios:dev` — `tauri ios dev`
+- `npm run android:dev` / `android:build` — present but unverified as an active target
 
-**Parameters:**
-- `identifier` - User UUID, pubKey, or 'demo'
+### `scripts/build-ios.cjs`
 
-**Response:** HTML page with card display, vCard download button, QR code
+1. Syncs `shared/vcard.js` into `src/lib/`.
+2. Bumps `.build-number` (App Store Connect rejects re-uploading the same `CFBundleVersion`).
+3. Wipes and regenerates `src-tauri/gen/apple/` via `tauri ios init` — a clean slate every time.
+4. Patches several things back in that don't survive that regeneration: the `ios-native/` source path (Quick Actions swizzling bridge + `PrivacyInfo.xcprivacy`), `TARGETED_DEVICE_FAMILY` restricted to iPhone-only (the UI is a fixed phone-sized window with no iPad layout or screenshots), `ITSAppUsesNonExemptEncryption: false` (skips the App Store Connect encryption questionnaire), the real app icon (`tauri ios init` reverts to Tauri's stock icon), flattened alpha channels on all icon sizes (App Store rejects an alpha channel on the 1024×1024 marketing icon), and the App Group entitlement (`group.freyja.idothis`).
+5. `tauri ios build --export-method app-store-connect --build-number <n>`, with a manual `xcodebuild -exportArchive` fallback for a known Xcode 26 export-plist quirk. Before attempting that fallback, the script checks the keychain for an actual Apple/iOS Distribution signing identity and aborts loudly if only a Development identity is present — builds 5–7 silently re-signed with the wrong identity type via this same fallback path and "succeeded" locally while producing IPAs that Apple's server-side validation rejected on upload.
+6. Copies the resulting IPA to `builds/v{version}/{ProductName}-{buildNumber}.ipa`.
 
-### GET /vcard/:identifier
+Upload to App Store Connect is a deliberately separate, manual step (Transporter.app or `xcrun altool`) — the script never uploads anything itself. There's also a top-level `~/Work/planet-nine/builds/` folder holding one "latest" IPA per sibling app as a manually-maintained convenience copy — not written by this script.
 
-Downloads vCard file for contact saving.
+## Known Limitations (documented, not oversights)
 
-**Parameters:**
-- `identifier` - User UUID, pubKey, or 'demo'
+- **Quick Actions plugin not registered**: `tauri-plugin-quick-actions`'s source (Rust + Swift) was lost to an accidental `git clean` and hasn't been rebuilt. The native `ios-native/BizbuzQuickActionsBridge.m` swizzling bridge still compiles in and is harmless, but nothing currently reads its pending-shortcut value back out to JS.
+- **Referral link points at a placeholder App Store URL**: `APP_STORE_URL` in `lib.rs` is a `TODO` (`apps.apple.com/app/id0000000000`) pending BizBuz's real listing.
+- **Referral card has no auto-redirect**: savage strips `<script>`/`javascript:`/`data:` content from any published SVG, so the invite card can't auto-navigate to the App Store — it's a plain `<a href>` "Get BizBuz" button instead, the same mechanism the card's own contact rows use.
+- **vCard has no special-character escaping**: `render_vcard` in Rust deliberately mirrors `shared/vcard.js`'s format field-for-field (including its lack of escaping) so a card looks identical whether downloaded from the app's share sheet or savage's page.
+- **Legacy Express implementation still in the repo**: `/bizbuz/server.js`, `/bizbuz/public/`, and the root `package.json` are the original pre-Tauri Express server (Prof-integration based, per its own `README.md`). It is not part of the Tauri build or app runtime today — the only thing still consumed from that era is `shared/vcard.js`, pulled in by `scripts/sync-shared.cjs`.
 
-**Response:** `text/vcard` file attachment
+## Related Documentation
 
-**vCard Format:** Version 3.0 with:
-- FN (Full Name)
-- TITLE
-- ORG (Organization)
-- TEL (Phone)
-- EMAIL
-- URL (Website, LinkedIn, GitHub, Twitter)
-- NOTE (Bio)
-
-### GET /qr/:identifier
-
-Generates QR code PNG image.
-
-**Parameters:**
-- `identifier` - User UUID, pubKey, or 'demo'
-
-**Response:** PNG image (300x300px)
-
-## Configuration
-
-### Environment Variables
-
-```bash
-PORT=3011                              # Server port
-PROF_BASE_URL=http://localhost:3012    # Prof service URL
-```
-
-### Default Prof URL
-
-If `PROF_BASE_URL` is not set, defaults to `http://localhost:3012`.
-
-## Prof Integration
-
-### Profile Fetch
-
-```javascript
-const response = await fetch(`${PROF_BASE_URL}/profile/${identifier}`);
-const profile = await response.json();
-```
-
-### Expected Profile Structure
-
-```javascript
-{
-  name: "Jane Developer",
-  title: "Software Engineer",
-  company: "Tech Corp",
-  email: "jane@example.com",
-  phone: "+1 (555) 123-4567",
-  website: "https://jane.dev",
-  linkedin: "https://linkedin.com/in/jane",
-  twitter: "janedev",
-  github: "janedev",
-  bio: "Building cool stuff"
-}
-```
-
-### Demo Profile
-
-When Prof is unavailable or identifier is 'demo':
-
-```javascript
-{
-  name: "Demo User",
-  title: "Software Engineer",
-  company: "Planet Nine",
-  email: "demo@planetnine.app",
-  phone: "+1 (555) 123-4567",
-  website: "https://planetnine.app",
-  github: "planet-nine",
-  bio: "This is a demo business card..."
-}
-```
-
-## Card Design
-
-### Theme
-
-- **Background**: Dark gradient (#0a0a0f → #1a1a2e → #16213e)
-- **Primary Color**: Planet Nine green (#10b981)
-- **Secondary Colors**: Blue (#3b82f6), Purple (#8b5cf6)
-- **Text**: Light gray (#e0e0e0, #9ca3af)
-
-### Visual Elements
-
-- Floating particle animation
-- Gradient avatar with initials
-- Glowing border effects
-- Responsive layout (mobile-friendly)
-
-### Card Sections
-
-1. **Header** - Avatar, name, title, company
-2. **Contact Links** - Email, phone, website with icons
-3. **Social Links** - LinkedIn, Twitter, GitHub
-4. **Bio** - Short description
-5. **Actions** - Save Contact button, QR code toggle
-
-## vCard Generation
-
-### Format
-
-```
-BEGIN:VCARD
-VERSION:3.0
-FN:Jane Developer
-TITLE:Software Engineer
-ORG:Tech Corp
-TEL;TYPE=WORK,VOICE:+1 (555) 123-4567
-EMAIL;TYPE=WORK:jane@example.com
-URL;TYPE=WORK:https://jane.dev
-URL;TYPE=LinkedIn:https://linkedin.com/in/jane
-URL;TYPE=GitHub:https://github.com/janedev
-NOTE:Building cool stuff
-END:VCARD
-```
-
-### Filename
-
-`{name}-bizbuz.vcf` (spaces replaced with dashes)
-
-## QR Code Generation
-
-Uses `qrcode` npm package:
-
-```javascript
-const QRCode = require('qrcode');
-const cardUrl = `${baseUrl}/card/${identifier}`;
-const qrBuffer = await QRCode.toBuffer(cardUrl, {
-  width: 300,
-  margin: 2,
-  color: { dark: '#10b981', light: '#0a0a0f' }
-});
-```
-
-## File Structure
-
-```
-bizbuz/
-├── server.js           # Main Express server
-├── package.json        # Dependencies
-├── README.md           # User documentation
-├── CLAUDE.md           # Development documentation (this file)
-└── public/
-    └── index.html      # Landing page
-```
-
-## Dependencies
-
-```json
-{
-  "express": "^4.18.2",
-  "qrcode": "^1.5.3",
-  "sessionless-node": "latest"
-}
-```
-
-## Development
-
-### Start Server
-
-```bash
-npm start          # Production
-npm run dev        # Development with nodemon
-```
-
-### Test Endpoints
-
-```bash
-# Landing page
-curl http://localhost:3011/
-
-# Demo card
-curl http://localhost:3011/card/demo
-
-# Download vCard
-curl -O http://localhost:3011/vcard/demo
-
-# Generate QR code
-curl -o qr.png http://localhost:3011/qr/demo
-```
-
-## Future Enhancements
-
-### Priority 1: Prof Integration
-
-- Test with real Prof service
-- Handle authentication for private profiles
-- Support profile images (base64)
-
-### Priority 2: Customization
-
-- Multiple card themes (light, dark, colorful)
-- Custom color schemes
-- Profile image upload
-- Social share previews
-
-### Priority 3: Features
-
-- Card analytics (view counts, privacy-preserving)
-- Short URL generation (bizbuz.app/u/jane)
-- NFC tag support for physical cards
-- Batch card generation for teams
-
-### Priority 4: Production
-
-- SSL/TLS configuration
-- Rate limiting
-- Caching for Prof data
-- Error tracking
-
-## Related Services
-
-- **Prof** (Port 3012) - Profile management
-- **Fount** - User authentication
-- **BDO** - Data storage
-- **Glyphenge** - Link tapestries (similar concept)
+- Sibling apps sharing the same Tauri scaffolding, App Group, and build-ios.cjs pattern: Gelder, Linkitylink, Gettit, Letemcook, idothis (see their own `CLAUDE.md`)
 
 ## Last Updated
-
-November 22, 2025 - Initial implementation with Prof integration, business card generation, vCard download, and QR code generation.
+September 2, 2026 — Full rewrite. The previous version of this file described an obsolete plain-Express-server architecture ("Initial Implementation (November 2025)") that no longer reflects the codebase; BizBuz is now a Tauri 2 native iOS app, documented here against the actual current source.

@@ -8,6 +8,7 @@
     "share-sheet:default",
     "app-group:default",
     "dialog:allow-open",
-    "fs:allow-read-file"
+    "fs:allow-read-file",
+    "shell:allow-open"
   ]
 }

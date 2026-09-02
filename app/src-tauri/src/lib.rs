@@ -10,9 +10,74 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::Manager;
 
 const MAX_CARDS: usize = 4;
-const GATEWAY_BDO_URL: &str = "https://allyabase-gateway.netlify.app/bdo/";
-const SAVAGE_URL: &str = "https://allyabase-gateway.netlify.app/savage/";
+const GATEWAY_BDO_URL: &str = "https://allyabase-gateway-12345.netlify.app/bdo/";
+const SAVAGE_URL: &str = "https://allyabase-gateway-12345.netlify.app/savage/";
 const BDO_HASH: &str = "bizbuz-card";
+
+// BDO mints its own server-side uuid on create_user, distinct from the local
+// keypair — a uuid minted against one gateway 404s an update_bdo call on
+// another, so both a card's publish record and the referral link are stored
+// per-env (keyed by this const) rather than as a single value. Bump this
+// whenever GATEWAY_BDO_URL points at a genuinely different BDO deployment.
+const GATEWAY_ENV: &str = "test-12345";
+
+// ── Categories ───────────────────────────────────────────────────────────────
+//
+// Same slug/label list as idothis's own CATEGORIES (the "what does this
+// business do" taxonomy every app in this bundle should agree on) — kept as
+// its own copy here rather than a shared crate, matching this ecosystem's
+// existing per-app-copy convention (see jobs.rs/locations.rs in Gettit/
+// letemcook for the same pattern). Keep in sync by hand if either list
+// changes.
+
+const CATEGORIES: &[(&str, &str)] = &[
+    ("plumber", "Plumber"),
+    ("electrician", "Electrician"),
+    ("house_cleaner", "House Cleaner"),
+    ("caterer", "Caterer"),
+    ("restauranteur", "Restauranteur"),
+    ("chef", "Chef"),
+    ("food_cart", "Food Cart"),
+    ("handyman", "Handyman"),
+    ("landscaper", "Landscaper"),
+    ("painter", "Painter"),
+    ("carpenter", "Carpenter"),
+    ("hvac_technician", "HVAC Technician"),
+    ("photographer", "Photographer"),
+    ("videographer", "Videographer"),
+    ("hair_stylist", "Hair Stylist"),
+    ("barber", "Barber"),
+    ("massage_therapist", "Massage Therapist"),
+    ("personal_trainer", "Personal Trainer"),
+    ("tutor", "Tutor"),
+    ("pet_groomer", "Pet Groomer"),
+    ("dog_walker", "Dog Walker"),
+    ("auto_mechanic", "Auto Mechanic"),
+    ("mover", "Moving Services"),
+    ("interior_designer", "Interior Designer"),
+    ("web_developer", "Web Developer"),
+    ("graphic_designer", "Graphic Designer"),
+    ("accountant", "Accountant"),
+    ("event_planner", "Event Planner"),
+    ("dj_musician", "DJ / Musician"),
+    ("baker", "Baker"),
+    ("florist", "Florist"),
+    ("tailor", "Tailor / Seamstress"),
+];
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Category {
+    pub slug: String,
+    pub label: String,
+}
+
+#[tauri::command]
+async fn get_categories() -> Result<Vec<Category>, String> {
+    Ok(CATEGORIES
+        .iter()
+        .map(|(slug, label)| Category { slug: slug.to_string(), label: label.to_string() })
+        .collect())
+}
 
 // ── Data types ───────────────────────────────────────────────────────────────
 
@@ -46,6 +111,11 @@ pub struct Profile {
     pub website: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub location: Option<String>,
+    /// Coarse business-type tag, e.g. `"food"` for Food & Drink. Deliberately
+    /// narrow for now — see the frontend's category `<select>` for the full
+    /// set of values it can send.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bio: Option<String>,
     #[serde(default)]
@@ -53,9 +123,10 @@ pub struct Profile {
     /// Base64-encoded JPEG (no `data:` prefix), resized/cropped client-side.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub photo: Option<String>,
-    /// BDO identity uuid this card is published under, once published.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bdo_uuid: Option<String>,
+    /// BDO identity uuid this card is published under, per environment
+    /// (see `GATEWAY_ENV`) — a fresh env has no entry until first publish.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub bdo_uuid_by_env: HashMap<String, String>,
     /// Full pre-signed savage URL — hosted by allyabase's own infrastructure
     /// (not a bizbuz-run server), rendering the SVG this card was published
     /// with as a live webpage. Computed locally at publish time (signing is
@@ -542,7 +613,7 @@ async fn publish_card(app: tauri::AppHandle, card_id: String) -> Result<Profile,
     card_obj.insert("svg".to_string(), serde_json::Value::String(svg));
     card_obj.insert("vcard".to_string(), serde_json::Value::String(vcard));
 
-    let existing_uuid = store.cards[index].bdo_uuid.clone();
+    let existing_uuid = store.cards[index].bdo_uuid_by_env.get(GATEWAY_ENV).cloned();
 
     let uuid = if let Some(uuid) = existing_uuid {
         client
@@ -568,7 +639,7 @@ async fn publish_card(app: tauri::AppHandle, card_id: String) -> Result<Profile,
     );
 
     let card = &mut store.cards[index];
-    card.bdo_uuid = Some(uuid);
+    card.bdo_uuid_by_env.insert(GATEWAY_ENV.to_string(), uuid);
     card.share_url = Some(share_url);
     card.published_at = Some(unix_now_ms_string());
     let updated = card.clone();
@@ -607,15 +678,22 @@ fn referral_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(data_dir(app)?.join("referral.json"))
 }
 
-fn read_referral_link(app: &tauri::AppHandle) -> Option<ReferralLink> {
-    let path = referral_path(app).ok()?;
-    let contents = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&contents).ok()
+// Keyed by GATEWAY_ENV — same reasoning as Profile.bdo_uuid_by_env above, a
+// referral link published on one gateway doesn't exist on another.
+fn read_referral_links(app: &tauri::AppHandle) -> HashMap<String, ReferralLink> {
+    let path = match referral_path(app) {
+        Ok(p) => p,
+        Err(_) => return HashMap::new(),
+    };
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
 }
 
-fn write_referral_link(app: &tauri::AppHandle, link: &ReferralLink) -> Result<(), String> {
+fn write_referral_links(app: &tauri::AppHandle, links: &HashMap<String, ReferralLink>) -> Result<(), String> {
     let path = referral_path(app)?;
-    let json = serde_json::to_string_pretty(link).map_err(|e| e.to_string())?;
+    let json = serde_json::to_string_pretty(links).map_err(|e| e.to_string())?;
     fs::write(path, json).map_err(|e| e.to_string())
 }
 
@@ -662,8 +740,9 @@ fn render_referral_svg(app_store_url: &str) -> String {
 /// static and never needs re-publishing.
 #[tauri::command]
 async fn get_or_create_referral_link(app: tauri::AppHandle) -> Result<String, String> {
-    if let Some(link) = read_referral_link(&app) {
-        return Ok(link.share_url);
+    let mut links = read_referral_links(&app);
+    if let Some(link) = links.get(GATEWAY_ENV) {
+        return Ok(link.share_url.clone());
     }
 
     let sessionless = load_or_create_bdo_sessionless(&app, "referral")?;
@@ -688,7 +767,8 @@ async fn get_or_create_referral_link(app: tauri::AppHandle) -> Result<String, St
     );
 
     let link = ReferralLink { uuid, share_url: share_url.clone() };
-    write_referral_link(&app, &link)?;
+    links.insert(GATEWAY_ENV.to_string(), link);
+    write_referral_links(&app, &links)?;
     Ok(share_url)
 }
 
@@ -842,12 +922,30 @@ pub struct CanonicalField {
     pub value: String,
 }
 
+/// A standard postal address on the shared Canonical Profile. This app has
+/// no UI to view or edit it (Gettit does — see its lib.rs) — the field
+/// exists here purely so `save_canonical_profile` below can round-trip it
+/// without silently erasing whatever Gettit wrote, since every app that
+/// touches Canonical Profile overwrites the whole shared record on save.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Address {
+    pub street: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    pub city: String,
+    pub state: String,
+    pub zip: String,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct CanonicalProfile {
     pub photo: Option<String>,
     #[serde(default)]
     pub fields: Vec<CanonicalField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub address: Option<Address>,
     pub updated_at: Option<String>,
 }
 
@@ -882,6 +980,11 @@ async fn load_canonical_profile(app: tauri::AppHandle) -> Result<Option<Canonica
 
 #[tauri::command]
 async fn save_canonical_profile(app: tauri::AppHandle, mut profile: CanonicalProfile) -> Result<CanonicalProfile, String> {
+    // This app's own form never sends a real address (no UI for it — see
+    // Address's doc comment above), so always carry forward whatever's
+    // already stored rather than overwriting it with the incoming None.
+    profile.address = load_canonical_profile(app.clone()).await?.and_then(|p| p.address);
+
     let mut deduped: Vec<CanonicalField> = Vec::new();
     for mut field in profile.fields.into_iter() {
         if field.slug.trim().is_empty() {
@@ -918,7 +1021,9 @@ pub fn run() {
         .plugin(tauri_plugin_app_group::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
+            get_categories,
             load_cards,
             save_card,
             delete_card,

@@ -7,6 +7,63 @@ const MAX_CARDS = 4;
 // MAX_PROFILE_FIELDS in src-tauri/src/lib.rs.
 const MAX_PROFILE_FIELDS = 20;
 
+// Populated at init from the Rust-side CATEGORIES list (get_categories) —
+// shared with idothis's own taxonomy, see lib.rs. slug -> label.
+let categories = [];
+let categoryLabels = {};
+
+// Same food-related slugs idothis prompts on — keep in sync with lib.rs's
+// CATEGORIES if that list's food entries ever change.
+const FOOD_CATEGORY_SLUGS = ['caterer', 'restauranteur', 'chef', 'food_cart', 'baker'];
+
+// Card ids that have already been offered the "add to letemcook" prompt, so
+// re-saving the same food card doesn't re-nag on every edit.
+const LETEMCOOK_PROMPTED_KEY = 'bizbuz.letemcookPromptedCardIds';
+
+function hasBeenPromptedForLetemcook(cardId) {
+    try {
+        const ids = JSON.parse(localStorage.getItem(LETEMCOOK_PROMPTED_KEY) || '[]');
+        return ids.includes(cardId);
+    } catch {
+        return false;
+    }
+}
+
+function markPromptedForLetemcook(cardId) {
+    try {
+        const ids = JSON.parse(localStorage.getItem(LETEMCOOK_PROMPTED_KEY) || '[]');
+        if (!ids.includes(cardId)) {
+            ids.push(cardId);
+            localStorage.setItem(LETEMCOOK_PROMPTED_KEY, JSON.stringify(ids));
+        }
+    } catch {
+        // Best-effort — worst case the prompt reappears on a later save.
+    }
+}
+
+// Offers to also list a freshly-saved food card on letemcook, a sibling
+// food-ordering app in this ecosystem. Only ever prompted once per card id.
+function maybePromptLetemcook(card) {
+    if (!card.category || !FOOD_CATEGORY_SLUGS.includes(card.category)) return;
+    if (hasBeenPromptedForLetemcook(card.id)) return;
+    markPromptedForLetemcook(card.id);
+
+    const wantsToJoin = confirm(
+        `List "${card.name || 'this business'}" on letemcook too?`
+    );
+    if (!wantsToJoin) return;
+
+    const params = new URLSearchParams();
+    if (card.name) params.set('name', card.name);
+    if (card.bio) params.set('bio', card.bio);
+    if (card.location) params.set('address', card.location);
+    const url = `letemcook://add-location?${params.toString()}`;
+
+    core.invoke('plugin:shell|open', { path: url }).catch((err) => {
+        setStatus(`Couldn't open letemcook: ${err}`);
+    });
+}
+
 const cardsView = document.getElementById('cards-view');
 const editView = document.getElementById('edit-view');
 const cardView = document.getElementById('card-view');
@@ -17,7 +74,6 @@ const photoPreview = document.getElementById('photo-preview');
 const chooseePhotoBtn = document.getElementById('choose-photo-btn');
 const cancelEditBtn = document.getElementById('cancel-edit-btn');
 const deleteCardBtn = document.getElementById('delete-card-btn');
-const publishBtn = document.getElementById('publish-btn');
 const linkRow = document.getElementById('link-row');
 const linkText = document.getElementById('link-text');
 const copyLinkBtn = document.getElementById('copy-link-btn');
@@ -25,6 +81,7 @@ const referralShareBtn = document.getElementById('referral-share-btn');
 const importLinkitylinkBtn = document.getElementById('import-linkitylink-btn');
 const shareAppGroupBtn = document.getElementById('share-app-group-btn');
 const profileNavBtn = document.getElementById('profile-nav-btn');
+const backToCardsBtn = document.getElementById('back-to-cards-btn');
 const profileView = document.getElementById('profile-view');
 const profileForm = document.getElementById('canonical-profile-form');
 const profilePhotoPreview = document.getElementById('profile-photo-preview');
@@ -54,6 +111,7 @@ function showView(name) {
     cardView.hidden = name !== 'card';
     profileView.hidden = name !== 'profile';
     profileNavBtn.hidden = name === 'profile';
+    backToCardsBtn.hidden = name !== 'card';
 }
 
 let statusTimeout = null;
@@ -181,6 +239,7 @@ function profileFromForm() {
         phone: document.getElementById('field-phone').value.trim() || undefined,
         website: document.getElementById('field-website').value.trim() || undefined,
         location: document.getElementById('field-location').value.trim() || undefined,
+        category: document.getElementById('field-category').value || undefined,
         bio: document.getElementById('field-bio').value.trim() || undefined,
         social: {
             github: document.getElementById('field-github').value.trim() || undefined,
@@ -199,6 +258,7 @@ function fillForm(card) {
     document.getElementById('field-phone').value = card.phone || '';
     document.getElementById('field-website').value = card.website || '';
     document.getElementById('field-location').value = card.location || '';
+    document.getElementById('field-category').value = card.category || '';
     document.getElementById('field-bio').value = card.bio || '';
     document.getElementById('field-github').value = card.social?.github || '';
     document.getElementById('field-codeberg').value = card.social?.codeberg || '';
@@ -245,10 +305,8 @@ function renderPublishLink(card) {
     if (card.shareUrl) {
         linkText.textContent = card.shareUrl;
         linkRow.hidden = false;
-        publishBtn.textContent = 'Update Shareable Link';
     } else {
         linkRow.hidden = true;
-        publishBtn.textContent = 'Get Shareable Link';
     }
 }
 
@@ -267,16 +325,23 @@ function applyCardUpdate(updated) {
 // The shareable link (shareUrl, a pre-signed savage URL) is available the
 // instant publish_card returns — the signature never expires, so it's
 // computed once and doesn't need to be refreshed on later shares. Publishing
-// proactively in the background (on boot and after every edit, not only when
-// the user taps the button) keeps the published card in sync with the latest
-// edits without requiring an explicit re-publish tap first.
-async function backgroundPublishCard(cardId) {
+// proactively in the background (on boot and after every edit) keeps the
+// published card in sync with the latest edits — there's no explicit
+// re-publish button, saving again is the retry.
+//
+// `notifyOnError` is only set true from the save flow itself, where a
+// failure is worth surfacing so the user knows to save again — the
+// boot-time bulk resync (backgroundPublishAllCards) stays silent on
+// failure, since a network hiccup syncing a card the user isn't even
+// looking at shouldn't interrupt them.
+async function backgroundPublishCard(cardId, { notifyOnError = false } = {}) {
     try {
         const updated = await core.invoke('publish_card', { cardId });
         applyCardUpdate(updated);
-    } catch {
-        // Best-effort — network hiccups etc. shouldn't surface to the user
-        // for a sync they didn't explicitly ask for.
+    } catch (err) {
+        if (notifyOnError) {
+            setStatus(`Saved, but couldn't update your shareable link: ${err}. Save again to retry.`);
+        }
     }
 }
 
@@ -297,6 +362,10 @@ function renderCard(card) {
     const companyEl = document.getElementById('card-company');
     companyEl.textContent = card.company || '';
     companyEl.hidden = !card.company;
+
+    const categoryEl = document.getElementById('card-category');
+    categoryEl.textContent = categoryLabels[card.category] || '';
+    categoryEl.hidden = !card.category;
 
     const bioEl = document.getElementById('card-bio');
     bioEl.textContent = card.bio ? `"${card.bio}"` : '';
@@ -365,7 +434,8 @@ form.addEventListener('submit', async (e) => {
         renderCard(saved);
         renderPublishLink(saved);
         showView('card');
-        backgroundPublishCard(saved.id);
+        backgroundPublishCard(saved.id, { notifyOnError: true });
+        maybePromptLetemcook(saved);
     } catch (err) {
         setStatus(`Couldn't save: ${err}`);
     }
@@ -415,7 +485,7 @@ document.getElementById('edit-btn').addEventListener('click', () => {
     showView('edit');
 });
 
-document.getElementById('back-to-cards-btn').addEventListener('click', () => {
+backToCardsBtn.addEventListener('click', () => {
     activeCard = null;
     renderCardsGrid();
     showView('cards');
@@ -437,21 +507,6 @@ document.getElementById('share-btn').addEventListener('click', async () => {
         await shareCard(activeCard);
     } catch (err) {
         setStatus(`Couldn't share: ${err}`);
-    }
-});
-
-publishBtn.addEventListener('click', async () => {
-    if (!activeCard) return;
-    publishBtn.disabled = true;
-    setStatus('Publishing…');
-    try {
-        const updated = await core.invoke('publish_card', { cardId: activeCard.id });
-        applyCardUpdate(updated);
-        setStatus('Link ready!');
-    } catch (err) {
-        setStatus(`Couldn't publish: ${err}`);
-    } finally {
-        publishBtn.disabled = false;
     }
 });
 
@@ -714,6 +769,26 @@ profileForm.addEventListener('submit', async (e) => {
 
 profileCloseBtn.addEventListener('click', () => showView(preProfileView));
 
-loadCards().then(() => {
+function populateCategorySelect() {
+    const select = document.getElementById('field-category');
+    for (const c of categories) {
+        const opt = document.createElement('option');
+        opt.value = c.slug;
+        opt.textContent = c.label;
+        select.appendChild(opt);
+    }
+}
+
+async function init() {
+    try {
+        categories = await core.invoke('get_categories');
+    } catch {
+        categories = [];
+    }
+    categoryLabels = Object.fromEntries(categories.map((c) => [c.slug, c.label]));
+    populateCategorySelect();
+    await loadCards();
     backgroundPublishAllCards();
-});
+}
+
+init();
